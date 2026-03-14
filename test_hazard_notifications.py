@@ -280,3 +280,169 @@ def test_send_batch_firebase_not_configured():
         notification_service.FIREBASE_CREDENTIALS_PATH = original_path
         notification_service._firebase_initialized = original_init
         notification_service._firebase_available = original_avail
+
+
+# ---------------------------------------------------------------------------
+# /geofences/count
+# ---------------------------------------------------------------------------
+
+def test_geofences_count_empty(client: TestClient):
+    from geofence_service import geofence_service
+    geofence_service.set_polygons([])
+    resp = client.get("/geofences/count")
+    assert resp.status_code == 200
+    assert resp.json()["count"] == 0
+
+
+def test_geofences_count_after_load(client: TestClient):
+    from shapely.geometry import Polygon as ShapelyPolygon
+    from geofence_service import geofence_service
+
+    poly = ShapelyPolygon([(-92.1, 30.1), (-91.9, 30.1), (-91.9, 30.3), (-92.1, 30.3), (-92.1, 30.1)])
+    geofence_service.set_polygons([
+        {"event": "A", "severity": "High", "geometry": {}, "polygon": poly},
+        {"event": "B", "severity": "Low", "geometry": {}, "polygon": poly},
+    ])
+    resp = client.get("/geofences/count")
+    assert resp.json()["count"] == 2
+    geofence_service.set_polygons([])
+
+
+# ---------------------------------------------------------------------------
+# POST /geofences/load  (ML pipeline ingest / manual test data)
+# ---------------------------------------------------------------------------
+
+_SAMPLE_ZONE = {
+    "event": "Tornado Warning",
+    "severity": "Extreme",
+    "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+            [[-91.25, 30.35], [-90.95, 30.35], [-90.95, 30.55], [-91.25, 30.55], [-91.25, 30.35]]
+        ],
+    },
+}
+
+
+def test_load_geofences_replace(client: TestClient):
+    from geofence_service import geofence_service
+    # Pre-populate with one zone so we can verify it gets replaced
+    from shapely.geometry import Polygon as ShapelyPolygon
+    poly = ShapelyPolygon([(-92.1, 30.1), (-91.9, 30.1), (-91.9, 30.3), (-92.1, 30.3), (-92.1, 30.1)])
+    geofence_service.set_polygons([{"event": "Old", "severity": "Low", "geometry": {}, "polygon": poly}])
+
+    payload = {"hazard_zones": [_SAMPLE_ZONE], "replace": True}
+    resp = client.post("/geofences/load", json=payload)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["loaded"] == 1
+    assert data["total_cached"] == 1
+    assert data["replaced"] is True
+    # Old zone should be gone
+    zones = client.get("/geofences").json()
+    assert len(zones) == 1
+    assert zones[0]["event"] == "Tornado Warning"
+    geofence_service.set_polygons([])
+
+
+def test_load_geofences_append(client: TestClient):
+    from geofence_service import geofence_service
+    # Start with one zone
+    payload1 = {"hazard_zones": [_SAMPLE_ZONE], "replace": True}
+    client.post("/geofences/load", json=payload1)
+
+    second_zone = {
+        "event": "Flash Flood Warning",
+        "severity": "Severe",
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+                [[-90.15, 29.85], [-89.85, 29.85], [-89.85, 30.05], [-90.15, 30.05], [-90.15, 29.85]]
+            ],
+        },
+    }
+    payload2 = {"hazard_zones": [second_zone], "replace": False}
+    resp = client.post("/geofences/load", json=payload2)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["loaded"] == 1
+    assert data["total_cached"] == 2
+    assert data["replaced"] is False
+    geofence_service.set_polygons([])
+
+
+def test_load_geofences_invalid_geometry_is_skipped(client: TestClient):
+    from geofence_service import geofence_service
+    bad_zone = {
+        "event": "Bad Zone",
+        "severity": "Low",
+        "geometry": {"type": "Polygon", "coordinates": []},  # invalid — no rings
+    }
+    payload = {"hazard_zones": [bad_zone, _SAMPLE_ZONE], "replace": True}
+    resp = client.post("/geofences/load", json=payload)
+    assert resp.status_code == 200
+    data = resp.json()
+    # The bad zone is skipped; only the valid one is loaded
+    assert data["loaded"] == 1
+    assert data["total_cached"] == 1
+    assert "skipped" in data["message"]
+    geofence_service.set_polygons([])
+
+
+def test_load_geofences_check_location_works(client: TestClient):
+    """A point inside a loaded zone should be detected by /check-location."""
+    payload = {"hazard_zones": [_SAMPLE_ZONE], "replace": True}
+    client.post("/geofences/load", json=payload)
+
+    # Point inside the tornado warning box
+    resp = client.post("/check-location", json={"user_lat": 30.45, "user_lon": -91.10})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["inside"] is True
+    assert data["event"] == "Tornado Warning"
+
+    # Point outside
+    resp2 = client.post("/check-location", json={"user_lat": 10.0, "user_lon": 10.0})
+    assert resp2.json()["inside"] is False
+
+    from geofence_service import geofence_service
+    geofence_service.set_polygons([])
+
+
+# ---------------------------------------------------------------------------
+# POST /geofences/load-demo
+# ---------------------------------------------------------------------------
+
+def test_load_demo_geofences(client: TestClient):
+    from geofence_service import geofence_service
+    resp = client.post("/geofences/load-demo")
+    assert resp.status_code == 200
+    data = resp.json()
+    # The fixture has 4 sample zones
+    assert data["loaded"] == 4
+    assert data["total_cached"] == 4
+    assert data["replaced"] is True
+
+    # Verify zones are queryable
+    zones_resp = client.get("/geofences")
+    assert len(zones_resp.json()) == 4
+    event_names = {z["event"] for z in zones_resp.json()}
+    assert "Tornado Warning" in event_names
+    assert "Flash Flood Warning" in event_names
+
+    geofence_service.set_polygons([])
+
+
+def test_load_demo_then_check_location_inside(client: TestClient):
+    """After loading demo data, a point inside a demo zone should be detected."""
+    client.post("/geofences/load-demo")
+
+    # Baton Rouge area — inside the Tornado Warning demo box
+    resp = client.post("/check-location", json={"user_lat": 30.45, "user_lon": -91.10})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["inside"] is True
+    assert data["event"] == "Tornado Warning"
+
+    from geofence_service import geofence_service
+    geofence_service.set_polygons([])

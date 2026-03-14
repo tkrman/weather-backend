@@ -1,7 +1,10 @@
 import datetime
+import json
 import logging
+import pathlib
 
 from fastapi import Depends, FastAPI, HTTPException
+from shapely.geometry import shape
 from sqlalchemy.orm import Session
 
 from database import UserDevice, get_db, init_db
@@ -9,6 +12,8 @@ from geofence_service import geofence_service
 from models import (
     DeviceRegistrationRequest,
     DeviceRegistrationResponse,
+    GeofenceIngestRequest,
+    GeofenceIngestResponse,
     HazardNotificationResponse,
     LocationCheckRequest,
     LocationCheckResponse,
@@ -21,6 +26,10 @@ from notification_service import send_hazard_notifications_batch
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Louisiana Weather Geofence API")
+
+# Path to the bundled sample-data fixture (used by /geofences/load-demo)
+_FIXTURES_DIR = pathlib.Path(__file__).parent / "fixtures"
+_SAMPLE_HAZARD_ZONES_FILE = _FIXTURES_DIR / "sample_hazard_zones.json"
 
 
 @app.on_event("startup")
@@ -41,6 +50,107 @@ def health():
 @app.get("/geofences")
 def get_geofences():
     return geofence_service.get_geofences()
+
+
+@app.get("/geofences/count")
+def get_geofences_count():
+    """Return the number of hazard-zone polygons currently loaded in the cache."""
+    return {"count": geofence_service.count()}
+
+
+@app.post("/geofences/load", response_model=GeofenceIngestResponse, status_code=200)
+def load_geofences(request: GeofenceIngestRequest):
+    """
+    Load hazard-zone polygons directly into the in-memory cache.
+
+    **Primary use-cases:**
+    - The ML pipeline POSTs its predicted hazard zones here after each inference run.
+    - Developers testing without live NWS/WPC API access can POST sample GeoJSON
+      polygons (or use ``POST /geofences/load-demo`` for the built-in sample data).
+
+    Payload shape (mirrors ``fixtures/sample_hazard_zones.json``)::
+
+        {
+          "replace": true,
+          "hazard_zones": [
+            {
+              "event": "Tornado Warning",
+              "severity": "Extreme",
+              "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[-91.25, 30.35], [-90.95, 30.35], ...]]
+              }
+            }
+          ]
+        }
+    """
+    polygons = []
+    skipped = 0
+    for zone in request.hazard_zones:
+        try:
+            shp = shape(zone.geometry)
+            if shp.is_empty:
+                raise ValueError("geometry is empty (no coordinates)")
+        except Exception as exc:
+            logger.warning("Skipping zone '%s' — invalid geometry: %s", zone.event, exc)
+            skipped += 1
+            continue
+        polygons.append(
+            {
+                "event": zone.event,
+                "severity": zone.severity,
+                "geometry": zone.geometry,
+                "polygon": shp,
+            }
+        )
+
+    if request.replace:
+        geofence_service.set_polygons(polygons)
+    else:
+        with geofence_service.lock:
+            geofence_service.cached_polygons.extend(polygons)
+
+    total = geofence_service.count()
+    logger.info(
+        "Geofence ingest: loaded=%d skipped=%d replace=%s total_cached=%d",
+        len(polygons), skipped, request.replace, total,
+    )
+
+    return GeofenceIngestResponse(
+        loaded=len(polygons),
+        total_cached=total,
+        replaced=request.replace,
+        message=(
+            f"Loaded {len(polygons)} hazard zone(s)"
+            + (f" ({skipped} skipped due to invalid geometry)" if skipped else "")
+            + f". Cache now holds {total} zone(s)."
+        ),
+    )
+
+
+@app.post("/geofences/load-demo", response_model=GeofenceIngestResponse, status_code=200)
+def load_demo_geofences():
+    """
+    Load the built-in sample Louisiana hazard zones for offline testing.
+
+    Replaces the current cache with four representative zones (Tornado Warning,
+    Flash Flood Warning, Excessive Rainfall Outlook, Severe Thunderstorm Warning)
+    spread across Louisiana.  No live APIs, database, or ML pipeline required.
+
+    After calling this endpoint you can immediately test:
+    - ``GET  /geofences``                         — list the loaded zones
+    - ``POST /check-location``                    — check a coordinate against them
+    - ``POST /users/register``                    — register a test device
+    - ``PUT  /users/{id}/location``               — move device into/out of a zone
+    - ``POST /notifications/send-hazard-alerts``  — trigger (mock) FCM alerts
+    """
+    try:
+        raw = json.loads(_SAMPLE_HAZARD_ZONES_FILE.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not read sample fixture: {exc}") from exc
+
+    ingest = GeofenceIngestRequest(hazard_zones=raw["hazard_zones"], replace=True)
+    return load_geofences(ingest)
 
 
 @app.post("/check-location", response_model=LocationCheckResponse)

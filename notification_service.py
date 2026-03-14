@@ -1,7 +1,7 @@
 """
 notification_service.py — Firebase Cloud Messaging (FCM) push notifications.
 
-Initialises the Firebase Admin SDK lazily on first use.  When
+Initializes the Firebase Admin SDK lazily on first use.  When
 FIREBASE_CREDENTIALS_PATH is not set the service degrades gracefully:
 all send calls return a result that indicates Firebase is not configured
 rather than raising an exception.
@@ -21,7 +21,7 @@ _firebase_available: bool = False
 
 def _init_firebase() -> bool:
     """
-    Initialise the Firebase Admin SDK (once).
+    Initialize the Firebase Admin SDK (once).
 
     Returns True when Firebase is ready to send messages, False otherwise.
     """
@@ -49,11 +49,11 @@ def _init_firebase() -> bool:
             firebase_admin.initialize_app(cred)
 
         _firebase_available = True
-        logger.info("Firebase Admin SDK initialised successfully.")
+        logger.info("Firebase Admin SDK initialized successfully.")
         return True
 
     except Exception as exc:
-        logger.error("Failed to initialise Firebase Admin SDK: %s", exc)
+        logger.error("Failed to initialize Firebase Admin SDK: %s", exc)
         _firebase_available = False
         return False
 

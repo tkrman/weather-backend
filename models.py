@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Any, List
+from typing import Any, Dict, List
 
 
 class LocationCheckRequest(BaseModel):
@@ -71,3 +71,40 @@ class HazardNotificationResponse(BaseModel):
     failure_count: int
     firebase_configured: bool
     results: List[NotificationResultItem] = []
+
+
+# ---------------------------------------------------------------------------
+# Geofence ingest (ML pipeline / manual test data)
+# ---------------------------------------------------------------------------
+
+class HazardZoneItem(BaseModel):
+    """A single hazard zone as produced by the ML pipeline or posted manually for testing."""
+    event: str = Field(..., description="Alert type, e.g. 'Tornado Warning'")
+    severity: str = Field(..., description="Severity level, e.g. 'Extreme', 'SLGT'")
+    geometry: Dict[str, Any] = Field(
+        ...,
+        description="GeoJSON geometry object with 'type' and 'coordinates' keys",
+    )
+
+
+class GeofenceIngestRequest(BaseModel):
+    """
+    Payload accepted by POST /geofences/load.
+
+    The ML pipeline (or a developer testing manually) sends this to replace or
+    extend the in-memory hazard-zone cache without needing live NWS/WPC API access.
+    """
+    hazard_zones: List[HazardZoneItem] = Field(
+        ..., description="List of hazard zones to load into the cache"
+    )
+    replace: bool = Field(
+        True,
+        description="If true (default), the current cache is replaced. If false, zones are appended.",
+    )
+
+
+class GeofenceIngestResponse(BaseModel):
+    loaded: int
+    total_cached: int
+    replaced: bool
+    message: str
