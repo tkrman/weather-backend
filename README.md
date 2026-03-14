@@ -6,6 +6,48 @@ a device enters a hazard zone.
 
 ---
 
+## Repository structure
+
+```
+weather-backend/
+│
+│  ── Application ──────────────────────────────────────────────────────────
+├── main.py                    FastAPI app: all HTTP routes and request handlers
+├── database.py                SQLAlchemy engine, session factory, UserDevice ORM model
+├── models.py                  Pydantic request/response schemas used by the routes
+├── config.py                  Environment-variable configuration (DB URL, Firebase path, NWS URL)
+├── geofence_service.py        In-memory geofence cache; loaders for NWS alerts and WPC KMZ files;
+│                              point-in-polygon check (check_location)
+├── notification_service.py    Firebase Cloud Messaging (FCM) batch sender; degrades gracefully
+│                              when credentials are not configured
+│
+│  ── Tests & Data ─────────────────────────────────────────────────────────
+├── test_hazard_notifications.py   pytest test suite (unit + integration, 19 tests)
+├── test_offline.ps1               Windows PowerShell script: runs the full test flow end-to-end
+├── fixtures/
+│   └── sample_hazard_zones.json   Four sample Louisiana hazard zones used by POST /geofences/load-demo
+│
+│  ── Project files ─────────────────────────────────────────────────────────
+├── requirements.txt           Python dependencies
+├── README.md                  This file
+└── .gitignore
+```
+
+### How the pieces fit together
+
+```
+Android app
+    │  FCM token + GPS coords
+    ▼
+main.py  ──── POST /users/register ──────────────► database.py  (SQLite / Postgres)
+             PUT  /users/{id}/location ──────────► geofence_service.py (in-memory cache)
+             POST /notifications/send-hazard-alerts ──► notification_service.py ──► Firebase FCM
+             POST /geofences/load ◄──── ML pipeline posts predicted hazard zones
+             POST /geofences/load-demo ◄──── fixtures/sample_hazard_zones.json (offline dev)
+```
+
+---
+
 ## Quick start — no database or ML pipeline required
 
 The server uses **SQLite by default** (zero configuration — the file is created
