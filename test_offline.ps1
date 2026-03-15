@@ -202,7 +202,7 @@ $notifResult = Invoke-API -Method Post -Path "/notifications/send-hazard-alerts"
 if ($notifResult) {
     Write-Success "notified_users=$($notifResult.notified_users)  firebase_configured=$($notifResult.firebase_configured)  success=$($notifResult.success_count)  failure=$($notifResult.failure_count)"
     if (-not $notifResult.firebase_configured) {
-        Write-Host "    (Firebase credentials not set — notifications fail gracefully, which is expected)" -ForegroundColor Gray
+        Write-Host "    (Firebase credentials not set - notifications fail gracefully, which is expected)" -ForegroundColor Gray
     }
 }
 
