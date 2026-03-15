@@ -94,13 +94,23 @@ function Wait-ForServer {
 }
 
 # ---------------------------------------------------------------------------
-# Step 1: Install dependencies
+# Step 1: Create virtual environment (if needed) and install dependencies
 # ---------------------------------------------------------------------------
 
-Write-Step "Installing Python dependencies..."
-pip install -r requirements.txt --quiet
+Write-Step "Setting up virtual environment (.venv)..."
+if (-not (Test-Path ".venv")) {
+    python -m venv .venv
+    if ($LASTEXITCODE -ne 0) {
+        Write-Failure "Failed to create virtual environment. Make sure Python 3 is on your PATH."
+        exit 1
+    }
+}
+Write-Success "Virtual environment ready."
+
+Write-Step "Installing Python dependencies into .venv..."
+& ".venv\Scripts\pip" install -r requirements.txt --quiet
 if ($LASTEXITCODE -ne 0) {
-    Write-Failure "pip install failed. Make sure Python and pip are on your PATH."
+    Write-Failure "pip install failed inside the virtual environment."
     exit 1
 }
 Write-Success "Dependencies installed."
@@ -109,9 +119,9 @@ Write-Success "Dependencies installed."
 # Step 2: Start the FastAPI server in the background
 # ---------------------------------------------------------------------------
 
-Write-Step "Starting FastAPI server (python -m uvicorn main:app)..."
+Write-Step "Starting FastAPI server (.venv/Scripts/python -m uvicorn main:app)..."
 $SERVER_PROCESS = Start-Process `
-    -FilePath "python" `
+    -FilePath ".venv\Scripts\python" `
     -ArgumentList "-m", "uvicorn", "main:app", "--port", "8000" `
     -PassThru `
     -NoNewWindow
@@ -230,7 +240,7 @@ if ($zones) {
 # ---------------------------------------------------------------------------
 
 Write-Step "Running automated test suite (python -m pytest)..."
-python -m pytest test_hazard_notifications.py -v
+& ".venv\Scripts\python" -m pytest test_hazard_notifications.py -v
 if ($LASTEXITCODE -eq 0) {
     Write-Success "All tests passed."
 } else {

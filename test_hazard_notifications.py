@@ -1,5 +1,5 @@
 """
-test_hazard_notifications.py — Unit tests for device registration, location
+test_hazard_notifications.py - Unit tests for device registration, location
 updates, and hazard-zone push-notification endpoints.
 
 External I/O (FCM, NWS API) is mocked so the tests run offline.
@@ -376,7 +376,7 @@ def test_load_geofences_invalid_geometry_is_skipped(client: TestClient):
     bad_zone = {
         "event": "Bad Zone",
         "severity": "Low",
-        "geometry": {"type": "Polygon", "coordinates": []},  # invalid — no rings
+        "geometry": {"type": "Polygon", "coordinates": []},  # invalid - no rings
     }
     payload = {"hazard_zones": [bad_zone, _SAMPLE_ZONE], "replace": True}
     resp = client.post("/geofences/load", json=payload)
@@ -437,7 +437,7 @@ def test_load_demo_then_check_location_inside(client: TestClient):
     """After loading demo data, a point inside a demo zone should be detected."""
     client.post("/geofences/load-demo")
 
-    # Baton Rouge area — inside the Tornado Warning demo box
+    # Baton Rouge area - inside the Tornado Warning demo box
     resp = client.post("/check-location", json={"user_lat": 30.45, "user_lon": -91.10})
     assert resp.status_code == 200
     data = resp.json()

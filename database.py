@@ -1,5 +1,5 @@
 """
-database.py — SQLAlchemy engine, session factory, and ORM models.
+database.py - SQLAlchemy engine, session factory, and ORM models.
 """
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ class UserDevice(Base):
 
 
 def get_db():
-    """FastAPI dependency — yields a SQLAlchemy session and closes it on exit."""
+    """FastAPI dependency - yields a SQLAlchemy session and closes it on exit."""
     db: Session = SessionLocal()
     try:
         yield db

@@ -1,5 +1,5 @@
 """
-notification_service.py — Firebase Cloud Messaging (FCM) push notifications.
+notification_service.py - Firebase Cloud Messaging (FCM) push notifications.
 
 Initializes the Firebase Admin SDK lazily on first use.  When
 FIREBASE_CREDENTIALS_PATH is not set the service degrades gracefully:
@@ -66,16 +66,16 @@ def send_hazard_notifications_batch(
 
     Args:
         tokens_with_alerts: List of dicts, each with keys:
-            ``token``    — FCM registration token
-            ``event``    — e.g. "Tornado Warning"
-            ``severity`` — e.g. "Extreme"
+            ``token``    - FCM registration token
+            ``event``    - e.g. "Tornado Warning"
+            ``severity`` - e.g. "Extreme"
 
     Returns:
         A dict with keys:
-            ``success_count``       — number of messages sent successfully
-            ``failure_count``       — number of messages that failed
-            ``firebase_configured`` — whether Firebase was available
-            ``results``             — per-token outcome list
+            ``success_count``       - number of messages sent successfully
+            ``failure_count``       - number of messages that failed
+            ``firebase_configured`` - whether Firebase was available
+            ``results``             - per-token outcome list
     """
     if not tokens_with_alerts:
         return {
@@ -107,7 +107,7 @@ def send_hazard_notifications_batch(
             messaging.Message(
                 notification=messaging.Notification(
                     title="⚠️ Weather Hazard Alert",
-                    body=f"{item.get('event', 'Weather Alert')} — Severity: {item.get('severity', 'Unknown')}",
+                    body=f"{item.get('event', 'Weather Alert')} - Severity: {item.get('severity', 'Unknown')}",
                 ),
                 data={
                     "event": item.get("event", ""),
