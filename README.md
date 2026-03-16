@@ -163,6 +163,7 @@ curl http://localhost:8000/geofences
 | `GET`  | `/geofences` | List all cached hazard zones |
 | `GET`  | `/geofences/count` | Count cached hazard zones |
 | `POST` | `/geofences/load` | **ML pipeline ingest** — POST GeoJSON hazard zones |
+| `POST` | `/geofences/load-nws` | Fetch live hazard zones from the NWS Alerts API |
 | `POST` | `/geofences/load-demo` | Load built-in sample zones for offline testing |
 | `POST` | `/check-location` | Check if a lat/lon is inside any hazard zone |
 | `POST` | `/users/register` | Register (or update) a device with its FCM token |

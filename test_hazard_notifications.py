@@ -447,6 +447,116 @@ def test_load_geofences_check_location_works(client: TestClient):
 
 
 # ---------------------------------------------------------------------------
+# POST /geofences/load-nws  (live NWS Alerts API ingest)
+# ---------------------------------------------------------------------------
+
+_MOCK_NWS_RESPONSE = {
+    "features": [
+        {
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                    [[-91.25, 30.35], [-90.95, 30.35], [-90.95, 30.55], [-91.25, 30.55], [-91.25, 30.35]]
+                ],
+            },
+            "properties": {"event": "Tornado Warning", "severity": "Extreme"},
+        },
+        {
+            # geocode-only alert — no geometry; should be skipped
+            "geometry": None,
+            "properties": {"event": "Winter Storm Watch", "severity": "Moderate"},
+        },
+        {
+            "geometry": {"type": "Point", "coordinates": [-91.10, 30.45]},
+            "properties": {"event": "Special Weather Statement", "severity": "Minor"},
+        },
+    ]
+}
+
+
+def test_load_nws_geofences_success(client: TestClient):
+    """A mocked NWS response with one polygon, one no-geometry, one Point should
+    load exactly 1 zone (the polygon) and skip 2."""
+    from geofence_service import geofence_service
+
+    with patch.object(geofence_service, "fetch_alerts", return_value=_MOCK_NWS_RESPONSE):
+        resp = client.post("/geofences/load-nws")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["loaded"] == 1
+    assert data["total_cached"] == 1
+    assert data["replaced"] is True
+    assert "2 skipped" in data["message"]
+
+    zones = client.get("/geofences").json()
+    assert len(zones) == 1
+    assert zones[0]["event"] == "Tornado Warning"
+
+    geofence_service.set_polygons([])
+
+
+def test_load_nws_geofences_replaces_existing(client: TestClient):
+    """POST /geofences/load-nws should replace any previously cached zones."""
+    from shapely.geometry import Polygon as ShapelyPolygon
+    from geofence_service import geofence_service
+
+    poly = ShapelyPolygon([(-92.1, 30.1), (-91.9, 30.1), (-91.9, 30.3), (-92.1, 30.3), (-92.1, 30.1)])
+    geofence_service.set_polygons([
+        {"event": "Old Zone", "severity": "Low", "geometry": {}, "polygon": poly},
+        {"event": "Another Old Zone", "severity": "Low", "geometry": {}, "polygon": poly},
+    ])
+
+    single_zone_response = {
+        "features": [
+            {
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [
+                        [[-91.25, 30.35], [-90.95, 30.35], [-90.95, 30.55], [-91.25, 30.55], [-91.25, 30.35]]
+                    ],
+                },
+                "properties": {"event": "Flash Flood Warning", "severity": "Severe"},
+            }
+        ]
+    }
+    with patch.object(geofence_service, "fetch_alerts", return_value=single_zone_response):
+        resp = client.post("/geofences/load-nws")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["loaded"] == 1
+    assert data["total_cached"] == 1   # old zones replaced
+
+    geofence_service.set_polygons([])
+
+
+def test_load_nws_geofences_api_error_returns_502(client: TestClient):
+    """When the NWS API is unreachable the endpoint should return 502."""
+    from geofence_service import geofence_service
+
+    with patch.object(geofence_service, "fetch_alerts", side_effect=Exception("connection refused")):
+        resp = client.post("/geofences/load-nws")
+
+    assert resp.status_code == 502
+    assert "NWS API" in resp.json()["detail"]
+
+
+def test_load_nws_geofences_empty_features(client: TestClient):
+    """An NWS response with no features should load 0 zones successfully."""
+    from geofence_service import geofence_service
+
+    with patch.object(geofence_service, "fetch_alerts", return_value={"features": []}):
+        resp = client.post("/geofences/load-nws")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["loaded"] == 0
+    assert data["total_cached"] == 0
+    assert data["replaced"] is True
+
+
+# ---------------------------------------------------------------------------
 # POST /geofences/load-demo
 # ---------------------------------------------------------------------------
 
