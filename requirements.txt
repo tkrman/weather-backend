@@ -3,3 +3,6 @@ uvicorn
 requests
 shapely
 pydantic
+fastkml
+sqlalchemy
+firebase-admin
