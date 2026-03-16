@@ -23,6 +23,10 @@ WPC_ERO_KMZ_URL_TEMPLATE = (
     "https://www.wpc.ncep.noaa.gov/kml/ero/Day_{day}_Excessive_Rainfall_Outlook.kmz"
 )
 
+# Human-readable viewer pages (for confirmation links returned to callers)
+NWS_ALERTS_VIEWER_URL = "https://www.weather.gov/alerts"
+WPC_ERO_VIEWER_URL = "https://www.wpc.ncep.noaa.gov/qpf/ero.php"
+
 
 class GeofenceService:
     """
@@ -61,10 +65,13 @@ class GeofenceService:
         """Fetch the configured NWS alerts JSON from NWS_ALERTS_URL."""
         return self._http_get_json(NWS_ALERTS_URL)
 
-    def update_geofences(self) -> None:
+    def update_geofences(self) -> int:
         """
         Load *current* alerts from NWS_ALERTS_URL into cache, keeping only polygonal alerts.
         (Auto-refresh scheduling remains disabled for manual testing.)
+
+        Returns:
+            Number of polygon alerts loaded (0 on error).
         """
         try:
             data = self.fetch_alerts()
@@ -101,9 +108,11 @@ class GeofenceService:
                 self.cached_polygons = polygons
 
             print(f"[INFO] Updated {len(polygons)} geofences from NWS current alerts.")
+            return len(polygons)
 
         except Exception as e:
             print(f"[ERROR] update_geofences failed: {e}")
+            return 0
 
         # Manual mode by design
         # threading.Timer(REFRESH_INTERVAL_SECONDS, self.update_geofences).start()
