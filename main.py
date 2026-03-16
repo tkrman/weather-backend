@@ -88,11 +88,18 @@ def load_geofences(request: GeofenceIngestRequest):
     skipped = 0
     for zone in request.hazard_zones:
         try:
+            geom_type = zone.geometry.get("type")
+            if geom_type not in ("Polygon", "MultiPolygon"):
+                raise ValueError(
+                    f"Geofence areas must be Polygon or MultiPolygon geometries "
+                    f"(Point and LineString cannot define areas for location matching); "
+                    f"got {geom_type!r}"
+                )
             shp = shape(zone.geometry)
             if shp.is_empty:
                 raise ValueError("geometry is empty (no coordinates)")
         except Exception as exc:
-            logger.warning("Skipping zone '%s' — invalid geometry: %s", zone.event, exc)
+            logger.warning("Skipping zone '%s' - invalid geometry: %s", zone.event, exc)
             skipped += 1
             continue
         polygons.append(

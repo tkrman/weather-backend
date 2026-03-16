@@ -1,5 +1,6 @@
-from pydantic import BaseModel, Field
 from typing import Any, Dict, List
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class LocationCheckRequest(BaseModel):
@@ -94,6 +95,33 @@ class GeofenceIngestRequest(BaseModel):
     The ML pipeline (or a developer testing manually) sends this to replace or
     extend the in-memory hazard-zone cache without needing live NWS/WPC API access.
     """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "replace": True,
+                "hazard_zones": [
+                    {
+                        "event": "Tornado Warning",
+                        "severity": "Extreme",
+                        "geometry": {
+                            "type": "Polygon",
+                            "coordinates": [
+                                [
+                                    [-91.25, 30.35],
+                                    [-90.95, 30.35],
+                                    [-90.95, 30.55],
+                                    [-91.25, 30.55],
+                                    [-91.25, 30.35],
+                                ]
+                            ],
+                        },
+                    }
+                ],
+            }
+        }
+    )
+
     hazard_zones: List[HazardZoneItem] = Field(
         ..., description="List of hazard zones to load into the cache"
     )

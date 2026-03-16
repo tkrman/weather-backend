@@ -389,6 +389,43 @@ def test_load_geofences_invalid_geometry_is_skipped(client: TestClient):
     geofence_service.set_polygons([])
 
 
+def test_load_geofences_non_polygon_geometry_is_skipped(client: TestClient):
+    """Geometries that are not Polygon or MultiPolygon are rejected as invalid."""
+    from geofence_service import geofence_service
+    point_zone = {
+        "event": "Point Zone",
+        "severity": "Low",
+        "geometry": {"type": "Point", "coordinates": [-91.10, 30.45]},
+    }
+    payload = {"hazard_zones": [point_zone, _SAMPLE_ZONE], "replace": True}
+    resp = client.post("/geofences/load", json=payload)
+    assert resp.status_code == 200
+    data = resp.json()
+    # The Point zone is skipped; only the Polygon zone is loaded
+    assert data["loaded"] == 1
+    assert data["total_cached"] == 1
+    assert "skipped" in data["message"]
+    geofence_service.set_polygons([])
+
+
+def test_load_geofences_missing_geometry_type_is_skipped(client: TestClient):
+    """A geometry dict with no 'type' key is rejected as invalid."""
+    from geofence_service import geofence_service
+    bad_zone = {
+        "event": "No Type Zone",
+        "severity": "Low",
+        "geometry": {"coordinates": [[[-91.25, 30.35], [-90.95, 30.35], [-90.95, 30.55], [-91.25, 30.55], [-91.25, 30.35]]]},
+    }
+    payload = {"hazard_zones": [bad_zone, _SAMPLE_ZONE], "replace": True}
+    resp = client.post("/geofences/load", json=payload)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["loaded"] == 1
+    assert data["total_cached"] == 1
+    assert "skipped" in data["message"]
+    geofence_service.set_polygons([])
+
+
 def test_load_geofences_check_location_works(client: TestClient):
     """A point inside a loaded zone should be detected by /check-location."""
     payload = {"hazard_zones": [_SAMPLE_ZONE], "replace": True}
