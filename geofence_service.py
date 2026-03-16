@@ -377,6 +377,61 @@ class GeofenceService:
         with self.lock:
             return len(self.cached_polygons)
 
+    def load_hazard_zones(
+        self, hazard_zones: List[Dict[str, Any]], replace: bool = True
+    ) -> int:
+        """
+        Load hazard-zone polygons directly into the in-memory cache.
+
+        Each entry must contain at minimum a ``geometry`` dict (GeoJSON Polygon or
+        MultiPolygon).  ``event`` and ``severity`` are optional but recommended.
+
+        Args:
+            hazard_zones: List of dicts with keys ``event``, ``severity``, ``geometry``.
+            replace: If True, replaces the existing cache; otherwise appends to it.
+
+        Returns:
+            Number of polygons successfully loaded.
+        """
+        polygons: List[Dict[str, Any]] = []
+        for item in hazard_zones:
+            geometry = item.get("geometry")
+            if not geometry:
+                print("[WARN] load_hazard_zones: skipping entry with missing geometry.")
+                continue
+
+            gtype = geometry.get("type") if isinstance(geometry, dict) else None
+            if gtype not in ("Polygon", "MultiPolygon"):
+                print(
+                    f"[WARN] load_hazard_zones: unsupported geometry type '{gtype}'; skipping."
+                )
+                continue
+
+            try:
+                shp: BaseGeometry = shape(geometry)
+            except Exception as exc:
+                print(f"[WARN] load_hazard_zones: failed to parse geometry: {exc}")
+                continue
+
+            polygons.append(
+                {
+                    "event": item.get("event"),
+                    "severity": item.get("severity"),
+                    "geometry": geometry,
+                    "polygon": shp,
+                }
+            )
+
+        with self.lock:
+            if replace:
+                self.cached_polygons = polygons
+            else:
+                self.cached_polygons.extend(polygons)
+
+        action = "Replaced cache with" if replace else "Appended"
+        print(f"[INFO] load_hazard_zones: {action} {len(polygons)} polygon(s).")
+        return len(polygons)
+
     def set_polygons(self, polygons: List[Dict[str, Any]]) -> None:
         """Replace cache (useful for tests)."""
         with self.lock:
