@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import json
 import threading
 import zipfile
 from typing import Any, Dict, List, Optional, Tuple
@@ -341,6 +342,94 @@ class GeofenceService:
 
         print(f"[INFO] WPC KMZ (local: {path}) → {len(polygons)} polygons loaded.")
         return len(polygons)
+
+    # ------------------------------------------------------------------
+    # Hazard-zone direct loader (ML pipeline / manual GeoJSON POST)
+    # ------------------------------------------------------------------
+
+    def load_hazard_zones(
+        self, hazard_zones: List[Dict[str, Any]], replace_cache: bool = True
+    ) -> int:
+        """
+        Load a list of hazard-zone dicts (with GeoJSON geometry) into the cache.
+
+        Each entry must have:
+          • "event"    – str
+          • "geometry" – GeoJSON Polygon or MultiPolygon dict
+          • "severity" – optional str
+
+        Args:
+            hazard_zones:  List of dicts as described above.
+            replace_cache: If True (default), existing cache is replaced;
+                           if False, entries are appended.
+        Returns:
+            Number of entries successfully loaded.
+
+        Raises:
+            ValueError: if a geometry type is not Polygon or MultiPolygon.
+        """
+        polygons: List[Dict[str, Any]] = []
+
+        for zone in hazard_zones:
+            geometry = zone.get("geometry")
+            if not geometry:
+                raise ValueError("Each hazard zone must include a 'geometry' field.")
+
+            gtype = geometry.get("type") if isinstance(geometry, dict) else None
+            if gtype not in ("Polygon", "MultiPolygon"):
+                raise ValueError(
+                    f"Unsupported geometry type '{gtype}'. "
+                    "Only 'Polygon' and 'MultiPolygon' are accepted."
+                )
+
+            try:
+                shp: BaseGeometry = shape(geometry)
+            except Exception as exc:
+                raise ValueError(f"Failed to parse geometry: {exc}") from exc
+
+            polygons.append(
+                {
+                    "event": zone.get("event"),
+                    "severity": zone.get("severity"),
+                    "geometry": geometry,
+                    "polygon": shp,
+                }
+            )
+
+        with self.lock:
+            if replace_cache:
+                self.cached_polygons = polygons
+            else:
+                self.cached_polygons.extend(polygons)
+
+        print(f"[INFO] load_hazard_zones → {len(polygons)} zones loaded "
+              f"({'replaced' if replace_cache else 'appended'}).")
+        return len(polygons)
+
+    def load_hazard_zones_from_file(
+        self, path: str, replace_cache: bool = True
+    ) -> int:
+        """
+        Load hazard zones from a JSON file on disk (e.g. the demo fixture).
+
+        The file must be shaped like the POST /hazard-zones/load payload:
+          { "hazard_zones": [ { "event": ..., "severity": ..., "geometry": {...} } ] }
+
+        Args:
+            path:          Absolute or relative path to the JSON file.
+            replace_cache: Forwarded to load_hazard_zones().
+        Returns:
+            Number of entries successfully loaded.
+        """
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except Exception as exc:
+            print(f"[ERROR] load_hazard_zones_from_file: could not read '{path}': {exc}")
+            return 0
+
+        hazard_zones = data.get("hazard_zones", [])
+        return self.load_hazard_zones(hazard_zones, replace_cache=replace_cache)
 
     # ------------------------------------------------------------------
     # Back-compat shim: previous 'update_wpc_polygons' method name
