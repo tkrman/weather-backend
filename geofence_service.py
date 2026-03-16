@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import io
+import json
+import os
 import threading
 import zipfile
 from typing import Any, Dict, List, Optional, Tuple
@@ -358,6 +360,90 @@ class GeofenceService:
     # ------------------------------------------------------------------
     # Accessors, utilities, and geofence check
     # ------------------------------------------------------------------
+    def load_hazard_zones(
+        self,
+        hazard_zones: List[Dict[str, Any]],
+        replace: bool = True,
+    ) -> int:
+        """
+        Load hazard-zone polygons directly into the in-memory cache.
+
+        Each entry in *hazard_zones* must have:
+          - ``event``    – human-readable event name (str)
+          - ``geometry`` – GeoJSON geometry dict (Polygon or MultiPolygon)
+          - ``severity`` – optional severity string
+
+        Args:
+            hazard_zones: List of hazard zone dicts (from POST payload or sample data).
+            replace: If True, replaces the cache; if False, appends.
+
+        Returns:
+            Number of polygons successfully loaded.
+        """
+        polygons: List[Dict[str, Any]] = []
+
+        for zone in hazard_zones:
+            geometry = zone.get("geometry")
+            if not geometry:
+                print("[WARN] load_hazard_zones: zone missing 'geometry', skipping.")
+                continue
+
+            gtype = geometry.get("type")
+            if gtype not in ("Polygon", "MultiPolygon"):
+                print(f"[WARN] load_hazard_zones: unsupported geometry type '{gtype}', skipping.")
+                continue
+
+            try:
+                shp: BaseGeometry = shape(geometry)
+            except Exception as exc:
+                print(f"[WARN] load_hazard_zones: failed to parse geometry: {exc}")
+                continue
+
+            polygons.append(
+                {
+                    "event": zone.get("event"),
+                    "severity": zone.get("severity"),
+                    "geometry": geometry,
+                    "polygon": shp,
+                }
+            )
+
+        with self.lock:
+            if replace:
+                self.cached_polygons = polygons
+            else:
+                self.cached_polygons.extend(polygons)
+
+        print(f"[INFO] load_hazard_zones: {len(polygons)} polygons loaded (replace={replace}).")
+        return len(polygons)
+
+    def load_demo_data(self, replace: bool = True) -> int:
+        """
+        Load the built-in sample hazard zones from fixtures/sample_hazard_zones.json.
+
+        Useful for developers testing without live NWS/WPC API access.
+
+        Args:
+            replace: If True, replaces the cache; if False, appends.
+
+        Returns:
+            Number of polygons successfully loaded.
+        """
+        fixtures_path = os.path.join(
+            os.path.dirname(__file__), "fixtures", "sample_hazard_zones.json"
+        )
+        try:
+            with open(fixtures_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            print(f"[ERROR] load_demo_data: could not read fixtures file: {e}")
+            return 0
+
+        zones = data.get("hazard_zones", [])
+        loaded = self.load_hazard_zones(zones, replace=replace)
+        print(f"[INFO] load_demo_data: {loaded} demo polygons loaded from fixtures.")
+        return loaded
+
     def get_geofences(self) -> List[Dict[str, Any]]:
         """
         Return a public-safe view of cached polygons (no shapely object).

@@ -1,0 +1,53 @@
+{
+  "replace": true,
+  "hazard_zones": [
+    {
+      "event": "Tornado Warning",
+      "severity": "Extreme",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [-91.25, 30.35],
+            [-90.95, 30.35],
+            [-90.95, 30.65],
+            [-91.25, 30.65],
+            [-91.25, 30.35]
+          ]
+        ]
+      }
+    },
+    {
+      "event": "Flash Flood Warning",
+      "severity": "Severe",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [-90.50, 29.90],
+            [-90.20, 29.90],
+            [-90.20, 30.10],
+            [-90.50, 30.10],
+            [-90.50, 29.90]
+          ]
+        ]
+      }
+    },
+    {
+      "event": "Excessive Rainfall Outlook",
+      "severity": "SLGT",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [-92.00, 31.00],
+            [-91.00, 31.00],
+            [-91.00, 32.00],
+            [-92.00, 32.00],
+            [-92.00, 31.00]
+          ]
+        ]
+      }
+    }
+  ]
+}
