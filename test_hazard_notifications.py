@@ -593,3 +593,107 @@ def test_load_demo_then_check_location_inside(client: TestClient):
 
     from geofence_service import geofence_service
     geofence_service.set_polygons([])
+
+
+
+# ---------------------------------------------------------------------------
+# _parse_wpc_kmz_bytes – Louisiana bounding-box filter
+# ---------------------------------------------------------------------------
+
+# WKT polygons reused across the KMZ filter tests
+_WKT_LA_BATON_ROUGE = "POLYGON((-91.2 30.3, -91.0 30.3, -91.0 30.5, -91.2 30.5, -91.2 30.3))"
+_WKT_NE_NEW_YORK    = "POLYGON((-74.1 40.6, -73.9 40.6, -73.9 40.8, -74.1 40.8, -74.1 40.6))"
+
+
+def _build_minimal_kmz(polygon_wkt: str, name: str = "MRGL") -> bytes:
+    """
+    Build a minimal KMZ (zip of doc.kml) containing a single Placemark whose
+    geometry is described by *polygon_wkt* (a WKT string for a Polygon).
+    """
+    import io as _io
+    import zipfile as _zf
+    from shapely import wkt as shapely_wkt
+
+    poly = shapely_wkt.loads(polygon_wkt)
+    coords = " ".join(f"{x},{y},0" for x, y in poly.exterior.coords)
+    kml_text = f"""<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <Placemark>
+      <name>{name}</name>
+      <Polygon>
+        <outerBoundaryIs>
+          <LinearRing>
+            <coordinates>{coords}</coordinates>
+          </LinearRing>
+        </outerBoundaryIs>
+      </Polygon>
+    </Placemark>
+  </Document>
+</kml>"""
+    buf = _io.BytesIO()
+    with _zf.ZipFile(buf, "w") as zf:
+        zf.writestr("doc.kml", kml_text)
+    return buf.getvalue()
+
+
+def test_parse_wpc_kmz_bytes_keeps_louisiana_polygon():
+    """A polygon that intersects Louisiana should be retained after parsing."""
+    from geofence_service import GeofenceService
+
+    svc = GeofenceService()
+    # Small polygon centred on Baton Rouge, clearly inside Louisiana
+    kmz = _build_minimal_kmz(_WKT_LA_BATON_ROUGE, name="MRGL")
+    result = svc._parse_wpc_kmz_bytes(kmz, day=1)
+    assert len(result) == 1
+    assert result[0]["event"] == "Excessive Rainfall Outlook"
+    assert result[0]["severity"] == "MRGL"
+
+
+def test_parse_wpc_kmz_bytes_excludes_northeast_polygon():
+    """A polygon located in the northeast US (outside Louisiana) should be filtered out."""
+    from geofence_service import GeofenceService
+
+    svc = GeofenceService()
+    # Small polygon centred on New York City - far outside Louisiana
+    kmz = _build_minimal_kmz(_WKT_NE_NEW_YORK, name="SLGT")
+    result = svc._parse_wpc_kmz_bytes(kmz, day=1)
+    assert result == [], "Northeast polygon should be excluded by the Louisiana bounding-box filter"
+
+
+def test_parse_wpc_kmz_bytes_mixed_polygons():
+    """Only the Louisiana polygon is kept when both a Louisiana and a northeast polygon are present."""
+    import io as _io
+    import zipfile as _zf
+    from shapely import wkt as shapely_wkt
+    from geofence_service import GeofenceService
+
+    def _poly_coords(wkt_str: str) -> str:
+        poly = shapely_wkt.loads(wkt_str)
+        return " ".join(f"{x},{y},0" for x, y in poly.exterior.coords)
+
+    la_coords = _poly_coords(_WKT_LA_BATON_ROUGE)
+    ne_coords = _poly_coords(_WKT_NE_NEW_YORK)
+    kml_text = f"""<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <Placemark><name>MRGL</name>
+      <Polygon><outerBoundaryIs><LinearRing>
+        <coordinates>{la_coords}</coordinates>
+      </LinearRing></outerBoundaryIs></Polygon>
+    </Placemark>
+    <Placemark><name>SLGT</name>
+      <Polygon><outerBoundaryIs><LinearRing>
+        <coordinates>{ne_coords}</coordinates>
+      </LinearRing></outerBoundaryIs></Polygon>
+    </Placemark>
+  </Document>
+</kml>"""
+    buf = _io.BytesIO()
+    with _zf.ZipFile(buf, "w") as zf:
+        zf.writestr("doc.kml", kml_text)
+
+    svc = GeofenceService()
+    result = svc._parse_wpc_kmz_bytes(buf.getvalue(), day=1)
+    assert len(result) == 1
+    assert result[0]["severity"] == "MRGL", "Only the Louisiana (MRGL) polygon should survive"

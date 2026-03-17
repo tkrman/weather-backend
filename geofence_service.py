@@ -7,7 +7,7 @@ import zipfile
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-from shapely.geometry import Point, shape, Polygon, MultiPolygon
+from shapely.geometry import Point, shape, Polygon, MultiPolygon, box
 from shapely.geometry.base import BaseGeometry
 from fastkml import kml
 
@@ -20,6 +20,11 @@ DEFAULT_TIMEOUT = 15  # seconds
 WPC_ERO_KMZ_URL_TEMPLATE = (
     "https://www.wpc.ncep.noaa.gov/kml/ero/Day_{day}_Excessive_Rainfall_Outlook.kmz"
 )
+
+# Louisiana geographic bounding box (minx, miny, maxx, maxy) in decimal degrees.
+# Only ERO polygons that intersect this region are retained.
+LOUISIANA_BOUNDS = (-94.043, 28.928, -88.817, 33.019)
+_LOUISIANA_BOX: Polygon = box(*LOUISIANA_BOUNDS)
 
 
 class GeofenceService:
@@ -219,8 +224,7 @@ class GeofenceService:
 
         # 2) Parse KML -> Shapely via fastkml
         try:
-            doc = kml.KML()
-            doc.from_string(kml_bytes)
+            doc = kml.KML.from_string(kml_bytes)
         except Exception as e:
             raise RuntimeError(f"Failed to parse KML: {e}") from e
 
@@ -251,9 +255,13 @@ class GeofenceService:
             if geom is None:
                 continue
 
-            shp = geom  # fastkml already returns a Shapely geometry
+            shp = shape(geom.__geo_interface__)  # convert pygeoif -> Shapely
             if isinstance(shp, Polygon):
                 shp = MultiPolygon([shp])
+
+            # Only keep polygons that overlap the Louisiana region
+            if not shp.intersects(_LOUISIANA_BOX):
+                continue
 
             severity = self._standardize_ero_category(getattr(node, "name", None))
             polygons.append(
