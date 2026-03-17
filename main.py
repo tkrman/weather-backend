@@ -135,6 +135,80 @@ def load_geofences(request: GeofenceIngestRequest):
     )
 
 
+@app.post("/geofences/load-nws", response_model=GeofenceIngestResponse, status_code=200)
+def load_nws_geofences():
+    """
+    Fetch the latest hazard-zone polygons from the live NWS Alerts API and load
+    them into the in-memory cache, replacing any previously cached data.
+
+    Only alerts that carry a ``Polygon`` or ``MultiPolygon`` geometry are kept;
+    geocode-only (county/zone) alerts that have no geometry are silently skipped.
+
+    Use ``POST /geofences/load-demo`` for offline testing without NWS API access,
+    or ``POST /geofences/load`` to push your own GeoJSON zones (e.g. from an ML
+    pipeline) directly into the cache.
+    """
+    try:
+        data = geofence_service.fetch_alerts()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to fetch alerts from NWS API: {exc}",
+        ) from exc
+
+    polygons = []
+    skipped = 0
+    for feature in data.get("features", []):
+        geometry = feature.get("geometry")
+        props = feature.get("properties", {}) or {}
+
+        if not geometry:
+            skipped += 1
+            continue
+
+        gtype = geometry.get("type")
+        if gtype not in ("Polygon", "MultiPolygon"):
+            skipped += 1
+            continue
+
+        try:
+            shp = shape(geometry)
+            if shp.is_empty:
+                raise ValueError("geometry is empty (no coordinates)")
+        except Exception as exc:
+            logger.warning("Skipping NWS feature '%s' - invalid geometry: %s",
+                           props.get("event"), exc)
+            skipped += 1
+            continue
+
+        polygons.append(
+            {
+                "event": props.get("event") or "Unknown Event",
+                "severity": props.get("severity") or "Unknown",
+                "geometry": geometry,
+                "polygon": shp,
+            }
+        )
+
+    geofence_service.set_polygons(polygons)
+    total = geofence_service.count()
+    logger.info(
+        "NWS ingest: loaded=%d skipped=%d total_cached=%d",
+        len(polygons), skipped, total,
+    )
+
+    return GeofenceIngestResponse(
+        loaded=len(polygons),
+        total_cached=total,
+        replaced=True,
+        message=(
+            f"Loaded {len(polygons)} hazard zone(s) from NWS API"
+            + (f" ({skipped} skipped due to missing/invalid geometry)" if skipped else "")
+            + f". Cache now holds {total} zone(s)."
+        ),
+    )
+
+
 @app.post("/geofences/load-demo", response_model=GeofenceIngestResponse, status_code=200)
 def load_demo_geofences():
     """
