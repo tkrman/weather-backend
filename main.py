@@ -14,6 +14,7 @@ from models import (
     DeviceRegistrationResponse,
     GeofenceIngestRequest,
     GeofenceIngestResponse,
+    GeofenceResponse,
     HazardNotificationResponse,
     LocationCheckRequest,
     LocationCheckResponse,
@@ -21,6 +22,7 @@ from models import (
     LocationUpdateResponse,
     NotificationResultItem,
 )
+from typing import List
 from notification_service import send_hazard_notifications_batch
 
 logger = logging.getLogger(__name__)
@@ -44,11 +46,29 @@ def startup_event():
 
 @app.get("/health")
 def health():
+    """Liveness check — returns ``{"status": "running"}`` when the API is up."""
     return {"status": "running"}
 
 
-@app.get("/geofences")
+@app.get("/geofences", response_model=List[GeofenceResponse])
 def get_geofences():
+    """
+    Return all hazard-zone polygons currently held in the in-memory cache.
+
+    Each item contains:
+    - **event** — the alert type (e.g. ``"Tornado Warning"``, ``"Excessive Rainfall Outlook"``)
+    - **severity** — the severity level (e.g. ``"Extreme"``, ``"MRGL"``, ``"SLGT"``)
+    - **geometry** — GeoJSON geometry object (``Polygon`` or ``MultiPolygon``) that
+      defines the geographic boundary of the hazard zone
+
+    The cache is populated by one of these endpoints:
+    - ``POST /geofences/load-demo`` — four sample Louisiana zones for offline testing
+    - ``POST /geofences/load-nws`` — live polygonal alerts from the NWS Alerts API
+    - ``POST /geofences/load`` — custom zones pushed by the ML pipeline or a developer
+    - ``POST /geofences/load-wpc`` — WPC Excessive Rainfall Outlook KMZ (Day 1–5)
+
+    Returns an empty list ``[]`` when no zones have been loaded yet.
+    """
     return geofence_service.get_geofences()
 
 
@@ -236,6 +256,17 @@ def load_demo_geofences():
 
 @app.post("/check-location", response_model=LocationCheckResponse)
 def check_location(request: LocationCheckRequest):
+    """
+    Check whether a given GPS coordinate falls inside any cached hazard zone.
+
+    Provide a latitude/longitude pair and this endpoint returns:
+    - **inside** — ``true`` if the point is within a hazard zone, ``false`` otherwise
+    - **event** — the alert type of the matching zone (e.g. ``"Tornado Warning"``), or ``null``
+    - **severity** — the severity level of the matching zone (e.g. ``"Extreme"``), or ``null``
+
+    Load zones first with ``POST /geofences/load-demo``, ``POST /geofences/load-nws``,
+    or ``POST /geofences/load`` before calling this endpoint.
+    """
     inside, event, severity = geofence_service.check_location(
         request.user_lat,
         request.user_lon
