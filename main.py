@@ -162,8 +162,14 @@ def load_nws_geofences():
     Fetch the latest hazard-zone polygons from the live NWS Alerts API and load
     them into the in-memory cache, replacing any previously cached data.
 
-    **Data source:** ``https://api.weather.gov/alerts/active?area=LA``
+    **Data source:** ``https://api.weather.gov/alerts/active?point=30.22,-92.02``
     (configured via ``NWS_ALERTS_URL`` in ``config.py``).
+
+    Using ``?point=lat,lon`` returns only the alerts that are **currently active
+    at that specific geographic point** — in this case the Lafayette, Louisiana
+    area (30.22 °N, 92.02 °W).  This is more precise than the ``?area=LA``
+    state-wide query, which could return alerts for any corner of the state
+    unrelated to the target location.
 
     **Important — this is NOT a multi-day forecast.**  The NWS ``/alerts/active``
     endpoint returns alerts that are **currently in effect** at the moment this

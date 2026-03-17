@@ -1,6 +1,6 @@
 import os
 
-NWS_ALERTS_URL = "https://api.weather.gov/alerts/active?area=LA"
+NWS_ALERTS_URL = "https://api.weather.gov/alerts/active?point=30.22,-92.02"
 REFRESH_INTERVAL_SECONDS = 300  # 5 minutes
 USER_AGENT = "Louisiana-Weather-Geofence-App (your@email.com)"
 
