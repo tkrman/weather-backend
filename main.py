@@ -14,6 +14,7 @@ from models import (
     DeviceRegistrationResponse,
     GeofenceIngestRequest,
     GeofenceIngestResponse,
+    GeofenceResponse,
     HazardNotificationResponse,
     LocationCheckRequest,
     LocationCheckResponse,
@@ -21,6 +22,7 @@ from models import (
     LocationUpdateResponse,
     NotificationResultItem,
 )
+from typing import List
 from notification_service import send_hazard_notifications_batch
 
 logger = logging.getLogger(__name__)
@@ -44,11 +46,29 @@ def startup_event():
 
 @app.get("/health")
 def health():
+    """Liveness check — returns ``{"status": "running"}`` when the API is up."""
     return {"status": "running"}
 
 
-@app.get("/geofences")
+@app.get("/geofences", response_model=List[GeofenceResponse])
 def get_geofences():
+    """
+    Return all hazard-zone polygons currently held in the in-memory cache.
+
+    Each item contains:
+    - **event** — the alert type (e.g. ``"Tornado Warning"``, ``"Excessive Rainfall Outlook"``)
+    - **severity** — the severity level (e.g. ``"Extreme"``, ``"MRGL"``, ``"SLGT"``)
+    - **geometry** — GeoJSON geometry object (``Polygon`` or ``MultiPolygon``) that
+      defines the geographic boundary of the hazard zone
+
+    The cache is populated by one of these endpoints:
+    - ``POST /geofences/load-demo`` — four sample Louisiana zones for offline testing
+    - ``POST /geofences/load-nws`` — live polygonal alerts from the NWS Alerts API
+    - ``POST /geofences/load`` — custom zones pushed by the ML pipeline or a developer
+    - ``POST /geofences/load-wpc`` — WPC Excessive Rainfall Outlook KMZ (Day 1–5)
+
+    Returns an empty list ``[]`` when no zones have been loaded yet.
+    """
     return geofence_service.get_geofences()
 
 
@@ -132,6 +152,7 @@ def load_geofences(request: GeofenceIngestRequest):
             + (f" ({skipped} skipped due to invalid geometry)" if skipped else "")
             + f". Cache now holds {total} zone(s)."
         ),
+        fetched_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
     )
 
 
@@ -141,12 +162,31 @@ def load_nws_geofences():
     Fetch the latest hazard-zone polygons from the live NWS Alerts API and load
     them into the in-memory cache, replacing any previously cached data.
 
+    **Data source:** ``https://api.weather.gov/alerts/active?point=30.22,-92.02``
+    (configured via ``NWS_ALERTS_URL`` in ``config.py``).
+
+    Using ``?point=lat,lon`` returns only the alerts that are **currently active
+    at that specific geographic point** — in this case the Lafayette, Louisiana
+    area (30.22 °N, 92.02 °W).  This is more precise than the ``?area=LA``
+    state-wide query, which could return alerts for any corner of the state
+    unrelated to the target location.
+
+    **Important — this is NOT a multi-day forecast.**  The NWS ``/alerts/active``
+    endpoint returns alerts that are **currently in effect** at the moment this
+    endpoint is called.  It does not predict future weather.  If you are looking
+    for the 5-day Excessive Rainfall Outlook, use ``POST /geofences/load-wpc``
+    instead.
+
     Only alerts that carry a ``Polygon`` or ``MultiPolygon`` geometry are kept;
     geocode-only (county/zone) alerts that have no geometry are silently skipped.
 
-    Use ``POST /geofences/load-demo`` for offline testing without NWS API access,
-    or ``POST /geofences/load`` to push your own GeoJSON zones (e.g. from an ML
-    pipeline) directly into the cache.
+    Each loaded zone includes:
+    - **effective** — when the alert became officially effective (ISO 8601)
+    - **onset** — when the hazardous event is expected to begin (ISO 8601)
+    - **expires** — when the alert expires (ISO 8601)
+
+    The response also includes **fetched_at** — the UTC timestamp of when this
+    request was processed, so you always know exactly how fresh the cached data is.
     """
     try:
         data = geofence_service.fetch_alerts()
@@ -187,6 +227,9 @@ def load_nws_geofences():
                 "severity": props.get("severity") or "Unknown",
                 "geometry": geometry,
                 "polygon": shp,
+                "effective": props.get("effective"),
+                "onset": props.get("onset"),
+                "expires": props.get("expires"),
             }
         )
 
@@ -206,6 +249,7 @@ def load_nws_geofences():
             + (f" ({skipped} skipped due to missing/invalid geometry)" if skipped else "")
             + f". Cache now holds {total} zone(s)."
         ),
+        fetched_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
     )
 
 
@@ -236,6 +280,17 @@ def load_demo_geofences():
 
 @app.post("/check-location", response_model=LocationCheckResponse)
 def check_location(request: LocationCheckRequest):
+    """
+    Check whether a given GPS coordinate falls inside any cached hazard zone.
+
+    Provide a latitude/longitude pair and this endpoint returns:
+    - **inside** — ``true`` if the point is within a hazard zone, ``false`` otherwise
+    - **event** — the alert type of the matching zone (e.g. ``"Tornado Warning"``), or ``null``
+    - **severity** — the severity level of the matching zone (e.g. ``"Extreme"``), or ``null``
+
+    Load zones first with ``POST /geofences/load-demo``, ``POST /geofences/load-nws``,
+    or ``POST /geofences/load`` before calling this endpoint.
+    """
     inside, event, severity = geofence_service.check_location(
         request.user_lat,
         request.user_lon
