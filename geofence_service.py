@@ -376,6 +376,9 @@ class GeofenceService:
                     "event": p.get("event"),
                     "severity": p.get("severity"),
                     "geometry": p.get("geometry"),
+                    "effective": p.get("effective"),
+                    "onset": p.get("onset"),
+                    "expires": p.get("expires"),
                 }
                 for p in self.cached_polygons
             ]

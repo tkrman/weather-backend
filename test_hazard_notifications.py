@@ -338,6 +338,7 @@ def test_load_geofences_replace(client: TestClient):
     assert data["loaded"] == 1
     assert data["total_cached"] == 1
     assert data["replaced"] is True
+    assert "fetched_at" in data
     # Old zone should be gone
     zones = client.get("/geofences").json()
     assert len(zones) == 1
@@ -459,7 +460,13 @@ _MOCK_NWS_RESPONSE = {
                     [[-91.25, 30.35], [-90.95, 30.35], [-90.95, 30.55], [-91.25, 30.55], [-91.25, 30.35]]
                 ],
             },
-            "properties": {"event": "Tornado Warning", "severity": "Extreme"},
+            "properties": {
+                "event": "Tornado Warning",
+                "severity": "Extreme",
+                "effective": "2026-03-17T00:00:00+00:00",
+                "onset": "2026-03-17T00:00:00+00:00",
+                "expires": "2026-03-17T06:00:00+00:00",
+            },
         },
         {
             # geocode-only alert — no geometry; should be skipped
@@ -476,7 +483,8 @@ _MOCK_NWS_RESPONSE = {
 
 def test_load_nws_geofences_success(client: TestClient):
     """A mocked NWS response with one polygon, one no-geometry, one Point should
-    load exactly 1 zone (the polygon) and skip 2."""
+    load exactly 1 zone (the polygon) and skip 2.  The response includes fetched_at
+    and each zone carries effective/onset/expires from the NWS properties."""
     from geofence_service import geofence_service
 
     with patch.object(geofence_service, "fetch_alerts", return_value=_MOCK_NWS_RESPONSE):
@@ -488,10 +496,18 @@ def test_load_nws_geofences_success(client: TestClient):
     assert data["total_cached"] == 1
     assert data["replaced"] is True
     assert "2 skipped" in data["message"]
+    # fetched_at must be present and look like an ISO timestamp
+    assert "fetched_at" in data
+    assert "T" in data["fetched_at"]
 
     zones = client.get("/geofences").json()
     assert len(zones) == 1
-    assert zones[0]["event"] == "Tornado Warning"
+    zone = zones[0]
+    assert zone["event"] == "Tornado Warning"
+    # Temporal fields from NWS properties must be surfaced
+    assert zone["effective"] == "2026-03-17T00:00:00+00:00"
+    assert zone["onset"] == "2026-03-17T00:00:00+00:00"
+    assert zone["expires"] == "2026-03-17T06:00:00+00:00"
 
     geofence_service.set_polygons([])
 

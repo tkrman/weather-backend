@@ -18,6 +18,18 @@ class GeofenceResponse(BaseModel):
     event: str
     severity: str
     geometry: Any
+    effective: str | None = Field(
+        None,
+        description="ISO 8601 datetime when the alert became effective (NWS alerts only)",
+    )
+    onset: str | None = Field(
+        None,
+        description="ISO 8601 datetime when the hazard event is expected to begin (NWS alerts only)",
+    )
+    expires: str | None = Field(
+        None,
+        description="ISO 8601 datetime when the alert expires (NWS alerts only)",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -136,3 +148,7 @@ class GeofenceIngestResponse(BaseModel):
     total_cached: int
     replaced: bool
     message: str
+    fetched_at: str = Field(
+        ...,
+        description="ISO 8601 UTC datetime when this ingest request was processed",
+    )

@@ -152,6 +152,7 @@ def load_geofences(request: GeofenceIngestRequest):
             + (f" ({skipped} skipped due to invalid geometry)" if skipped else "")
             + f". Cache now holds {total} zone(s)."
         ),
+        fetched_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
     )
 
 
@@ -161,12 +162,25 @@ def load_nws_geofences():
     Fetch the latest hazard-zone polygons from the live NWS Alerts API and load
     them into the in-memory cache, replacing any previously cached data.
 
+    **Data source:** ``https://api.weather.gov/alerts/active?area=LA``
+    (configured via ``NWS_ALERTS_URL`` in ``config.py``).
+
+    **Important — this is NOT a multi-day forecast.**  The NWS ``/alerts/active``
+    endpoint returns alerts that are **currently in effect** at the moment this
+    endpoint is called.  It does not predict future weather.  If you are looking
+    for the 5-day Excessive Rainfall Outlook, use ``POST /geofences/load-wpc``
+    instead.
+
     Only alerts that carry a ``Polygon`` or ``MultiPolygon`` geometry are kept;
     geocode-only (county/zone) alerts that have no geometry are silently skipped.
 
-    Use ``POST /geofences/load-demo`` for offline testing without NWS API access,
-    or ``POST /geofences/load`` to push your own GeoJSON zones (e.g. from an ML
-    pipeline) directly into the cache.
+    Each loaded zone includes:
+    - **effective** — when the alert became officially effective (ISO 8601)
+    - **onset** — when the hazardous event is expected to begin (ISO 8601)
+    - **expires** — when the alert expires (ISO 8601)
+
+    The response also includes **fetched_at** — the UTC timestamp of when this
+    request was processed, so you always know exactly how fresh the cached data is.
     """
     try:
         data = geofence_service.fetch_alerts()
@@ -207,6 +221,9 @@ def load_nws_geofences():
                 "severity": props.get("severity") or "Unknown",
                 "geometry": geometry,
                 "polygon": shp,
+                "effective": props.get("effective"),
+                "onset": props.get("onset"),
+                "expires": props.get("expires"),
             }
         )
 
@@ -226,6 +243,7 @@ def load_nws_geofences():
             + (f" ({skipped} skipped due to missing/invalid geometry)" if skipped else "")
             + f". Cache now holds {total} zone(s)."
         ),
+        fetched_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
     )
 
 
