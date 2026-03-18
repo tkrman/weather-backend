@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import threading
 import zipfile
 from typing import Any, Dict, List, Optional, Tuple
@@ -12,6 +13,8 @@ from shapely.geometry.base import BaseGeometry
 from fastkml import kml
 
 from config import NWS_ALERTS_URL, REFRESH_INTERVAL_SECONDS, USER_AGENT
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_TIMEOUT = 15  # seconds
@@ -212,13 +215,18 @@ class GeofenceService:
         try:
             with zipfile.ZipFile(io.BytesIO(kmz_bytes), "r") as zf:
                 kml_name = "doc.kml"
-                if kml_name not in zf.namelist():
+                all_names = zf.namelist()
+                if kml_name not in all_names:
                     # Fallback to first *.kml present
-                    kml_candidates = [n for n in zf.namelist() if n.lower().endswith(".kml")]
+                    kml_candidates = [n for n in all_names if n.lower().endswith(".kml")]
                     if not kml_candidates:
                         raise RuntimeError("KMZ has no KML file inside.")
                     kml_name = kml_candidates[0]
                 kml_bytes = zf.read(kml_name)
+            logger.info(
+                "[WPC Day %d] Extracted KML '%s' (%d bytes) from KMZ (%d bytes)",
+                day, kml_name, len(kml_bytes), len(kmz_bytes),
+            )
         except Exception as e:
             raise RuntimeError(f"Failed to extract KML from KMZ: {e}") from e
 
@@ -246,6 +254,9 @@ class GeofenceService:
                     yield from _iter_features(f)
 
         polygons: List[Dict[str, Any]] = []
+        total_features = 0
+        skipped_no_geom = 0
+        skipped_outside_la = 0
 
         # 4) Collect placemarks that actually have polygon geometry
         for node in _iter_features(doc):
@@ -253,14 +264,22 @@ class GeofenceService:
                 continue
             geom = getattr(node, "geometry", None)
             if geom is None:
+                skipped_no_geom += 1
                 continue
 
+            total_features += 1
             shp = shape(geom.__geo_interface__)  # convert pygeoif -> Shapely
             if isinstance(shp, Polygon):
                 shp = MultiPolygon([shp])
 
             # Only keep polygons that overlap the Louisiana region
             if not shp.intersects(_LOUISIANA_BOX):
+                name = getattr(node, "name", None)
+                logger.debug(
+                    "[WPC Day %d] Filtered out feature '%s' (outside Louisiana bounds)",
+                    day, name,
+                )
+                skipped_outside_la += 1
                 continue
 
             severity = self._standardize_ero_category(getattr(node, "name", None))
@@ -273,6 +292,11 @@ class GeofenceService:
                 }
             )
 
+        logger.info(
+            "[WPC Day %d] KML parsing complete: %d total features, "
+            "%d kept (Louisiana), %d filtered (outside LA), %d skipped (no geometry)",
+            day, total_features, len(polygons), skipped_outside_la, skipped_no_geom,
+        )
         return polygons
 
     def load_wpc_kmz(self, day: int, replace_cache: bool = False) -> int:
@@ -283,19 +307,38 @@ class GeofenceService:
             replace_cache: if True, replaces cache; else appends
         Returns:
             Number of polygons loaded.
+        Raises:
+            ValueError: if day is not in {1,2,3,4,5}
+            requests.HTTPError: if the HTTP request fails
+            RuntimeError: if KMZ parsing fails
         """
         if day not in (1, 2, 3, 4, 5):
             raise ValueError("day must be one of {1,2,3,4,5}")
 
         url = WPC_ERO_KMZ_URL_TEMPLATE.format(day=day)
+        logger.info("[WPC Day %d] Fetching KMZ from %s", day, url)
         try:
             headers = {"User-Agent": USER_AGENT}
             resp = requests.get(url, headers=headers, timeout=DEFAULT_TIMEOUT)
             resp.raise_for_status()
-            polygons = self._parse_wpc_kmz_bytes(resp.content, day=day)
-        except Exception as e:
-            print(f"[ERROR] load_wpc_kmz(Day {day}) failed: {e}")
-            return 0
+        except requests.HTTPError as e:
+            status = e.response.status_code if e.response is not None else "unknown"
+            size = len(e.response.content) if e.response is not None else 0
+            logger.error(
+                "[WPC Day %d] HTTP error fetching KMZ: %s (status=%s, size=%d bytes)",
+                day, e, status, size,
+            )
+            raise
+        except requests.RequestException as e:
+            logger.error("[WPC Day %d] Network error fetching KMZ: %s", day, e)
+            raise
+
+        logger.info(
+            "[WPC Day %d] KMZ downloaded: %d bytes (status=%d)",
+            day, len(resp.content), resp.status_code,
+        )
+
+        polygons = self._parse_wpc_kmz_bytes(resp.content, day=day)
 
         with self.lock:
             if replace_cache:
@@ -303,22 +346,40 @@ class GeofenceService:
             else:
                 self.cached_polygons.extend(polygons)
 
-        print(f"[INFO] WPC Day {day} KMZ → {len(polygons)} polygons loaded.")
+        logger.info("[WPC Day %d] KMZ loaded: %d polygon(s) cached.", day, len(polygons))
         return len(polygons)
 
     def load_wpc_kmz_by_url(self, url: str, day: int, replace_cache: bool = False) -> int:
         """
         Download a KMZ from an arbitrary URL, parse polygons, and load them.
         Useful for dated or alternate hosting paths.
+        Raises:
+            requests.HTTPError: if the HTTP request fails
+            RuntimeError: if KMZ parsing fails
         """
+        logger.info("[WPC Day %d] Fetching KMZ from custom URL: %s", day, url)
         try:
             headers = {"User-Agent": USER_AGENT}
             resp = requests.get(url, headers=headers, timeout=DEFAULT_TIMEOUT)
             resp.raise_for_status()
-            polygons = self._parse_wpc_kmz_bytes(resp.content, day=day)
-        except Exception as e:
-            print(f"[ERROR] load_wpc_kmz_by_url failed: {e}")
-            return 0
+        except requests.HTTPError as e:
+            status = e.response.status_code if e.response is not None else "unknown"
+            size = len(e.response.content) if e.response is not None else 0
+            logger.error(
+                "[WPC Day %d] HTTP error fetching KMZ from %s: %s (status=%s, size=%d bytes)",
+                day, url, e, status, size,
+            )
+            raise
+        except requests.RequestException as e:
+            logger.error("[WPC Day %d] Network error fetching KMZ from %s: %s", day, url, e)
+            raise
+
+        logger.info(
+            "[WPC Day %d] KMZ downloaded from %s: %d bytes (status=%d)",
+            day, url, len(resp.content), resp.status_code,
+        )
+
+        polygons = self._parse_wpc_kmz_bytes(resp.content, day=day)
 
         with self.lock:
             if replace_cache:
@@ -326,7 +387,7 @@ class GeofenceService:
             else:
                 self.cached_polygons.extend(polygons)
 
-        print(f"[INFO] WPC KMZ ({url}) → {len(polygons)} polygons loaded.")
+        logger.info("[WPC Day %d] KMZ loaded from %s: %d polygon(s) cached.", day, url, len(polygons))
         return len(polygons)
 
     def load_wpc_kmz_from_file(self, path: str, day: int, replace_cache: bool = False) -> int:

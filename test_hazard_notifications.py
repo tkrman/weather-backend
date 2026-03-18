@@ -713,3 +713,131 @@ def test_parse_wpc_kmz_bytes_mixed_polygons():
     result = svc._parse_wpc_kmz_bytes(buf.getvalue(), day=1)
     assert len(result) == 1
     assert result[0]["severity"] == "MRGL", "Only the Louisiana (MRGL) polygon should survive"
+
+
+# ---------------------------------------------------------------------------
+# POST /geofences/load-wpc  (WPC KMZ ingest endpoint)
+# ---------------------------------------------------------------------------
+
+
+def _build_la_kmz() -> bytes:
+    """Build a minimal KMZ with one Louisiana polygon (MRGL severity)."""
+    return _build_minimal_kmz(_WKT_LA_BATON_ROUGE, name="MRGL")
+
+
+def test_load_wpc_geofences_success(client: TestClient):
+    """POST /geofences/load-wpc should load Louisiana polygons and return 200."""
+    from geofence_service import geofence_service
+    import requests as real_requests
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = _build_la_kmz()
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("geofence_service.requests.get", return_value=mock_resp):
+        resp = client.post("/geofences/load-wpc?day=1&replace=true")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["loaded"] == 1
+    assert data["replaced"] is True
+    assert "fetched_at" in data
+    assert "T" in data["fetched_at"]
+    assert "Day 1" in data["message"]
+
+    geofence_service.set_polygons([])
+
+
+def test_load_wpc_geofences_custom_url(client: TestClient):
+    """POST /geofences/load-wpc?url=... should use load_wpc_kmz_by_url."""
+    from geofence_service import geofence_service
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = _build_la_kmz()
+    mock_resp.raise_for_status = MagicMock()
+
+    custom_url = "https://example.com/test.kmz"
+    with patch("geofence_service.requests.get", return_value=mock_resp) as mock_get:
+        resp = client.post(f"/geofences/load-wpc?day=1&replace=true&url={custom_url}")
+
+    assert resp.status_code == 200
+    mock_get.assert_called_once()
+    call_url = mock_get.call_args[0][0]
+    assert call_url == custom_url
+
+    geofence_service.set_polygons([])
+
+
+def test_load_wpc_geofences_http_error_returns_502(client: TestClient):
+    """When the upstream KMZ server returns an HTTP error, the endpoint returns 502."""
+    import requests as real_requests
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 404
+    mock_resp.content = b""
+    http_error = real_requests.HTTPError(response=mock_resp)
+    mock_resp.raise_for_status = MagicMock(side_effect=http_error)
+
+    with patch("geofence_service.requests.get", return_value=mock_resp):
+        resp = client.post("/geofences/load-wpc?day=1")
+
+    assert resp.status_code == 502
+    detail = resp.json()["detail"]
+    assert "Day 1" in detail
+    assert "HTTP" in detail
+
+
+def test_load_wpc_geofences_no_la_polygons_returns_502(client: TestClient):
+    """When KMZ parses fine but no polygons overlap Louisiana, endpoint returns 502."""
+    from geofence_service import geofence_service
+
+    # Build a KMZ with only a northeast polygon (outside Louisiana)
+    ne_kmz = _build_minimal_kmz(_WKT_NE_NEW_YORK, name="SLGT")
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = ne_kmz
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("geofence_service.requests.get", return_value=mock_resp):
+        resp = client.post("/geofences/load-wpc?day=1")
+
+    assert resp.status_code == 502
+    assert "Louisiana" in resp.json()["detail"]
+
+    geofence_service.set_polygons([])
+
+
+def test_load_wpc_geofences_invalid_day_returns_422(client: TestClient):
+    """Day values outside 1–5 should be rejected with a validation error (422)."""
+    resp = client.post("/geofences/load-wpc?day=6")
+    assert resp.status_code == 422
+
+
+def test_load_wpc_geofences_append_mode(client: TestClient):
+    """replace=false should append to existing cache rather than replace it."""
+    from geofence_service import geofence_service
+    from shapely.geometry import Polygon as ShapelyPolygon
+
+    # Pre-populate cache with one zone
+    poly = ShapelyPolygon([(-92.1, 30.1), (-91.9, 30.1), (-91.9, 30.3), (-92.1, 30.3), (-92.1, 30.1)])
+    geofence_service.set_polygons([
+        {"event": "Existing Zone", "severity": "Low", "geometry": {}, "polygon": poly}
+    ])
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = _build_la_kmz()
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("geofence_service.requests.get", return_value=mock_resp):
+        resp = client.post("/geofences/load-wpc?day=1&replace=false")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["replaced"] is False
+    assert data["total_cached"] == 2  # existing + newly loaded
+
+    geofence_service.set_polygons([])
