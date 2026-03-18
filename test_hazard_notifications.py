@@ -728,7 +728,6 @@ def _build_la_kmz() -> bytes:
 def test_load_wpc_geofences_success(client: TestClient):
     """POST /geofences/load-wpc should load Louisiana polygons and return 200."""
     from geofence_service import geofence_service
-    import requests as real_requests
 
     mock_resp = MagicMock()
     mock_resp.status_code = 200
@@ -750,7 +749,7 @@ def test_load_wpc_geofences_success(client: TestClient):
 
 
 def test_load_wpc_geofences_custom_url(client: TestClient):
-    """POST /geofences/load-wpc?url=... should use load_wpc_kmz_by_url."""
+    """POST /geofences/load-wpc?url=... should use load_wpc_kmz_by_url with a trusted host."""
     from geofence_service import geofence_service
 
     mock_resp = MagicMock()
@@ -758,7 +757,8 @@ def test_load_wpc_geofences_custom_url(client: TestClient):
     mock_resp.content = _build_la_kmz()
     mock_resp.raise_for_status = MagicMock()
 
-    custom_url = "https://example.com/test.kmz"
+    # Use a trusted WPC hostname
+    custom_url = "https://www.wpc.ncep.noaa.gov/kml/test/day1_ero.kmz"
     with patch("geofence_service.requests.get", return_value=mock_resp) as mock_get:
         resp = client.post(f"/geofences/load-wpc?day=1&replace=true&url={custom_url}")
 
@@ -770,14 +770,21 @@ def test_load_wpc_geofences_custom_url(client: TestClient):
     geofence_service.set_polygons([])
 
 
+def test_load_wpc_geofences_untrusted_url_returns_400(client: TestClient):
+    """Supplying an untrusted URL (SSRF safeguard) should return 400."""
+    resp = client.post("/geofences/load-wpc?day=1&url=https://evil.example.com/bad.kmz")
+    assert resp.status_code == 400
+    assert "trusted" in resp.json()["detail"].lower() or "invalid" in resp.json()["detail"].lower()
+
+
 def test_load_wpc_geofences_http_error_returns_502(client: TestClient):
     """When the upstream KMZ server returns an HTTP error, the endpoint returns 502."""
-    import requests as real_requests
+    from requests import HTTPError
 
     mock_resp = MagicMock()
     mock_resp.status_code = 404
     mock_resp.content = b""
-    http_error = real_requests.HTTPError(response=mock_resp)
+    http_error = HTTPError(response=mock_resp)
     mock_resp.raise_for_status = MagicMock(side_effect=http_error)
 
     with patch("geofence_service.requests.get", return_value=mock_resp):

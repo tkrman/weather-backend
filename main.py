@@ -315,13 +315,17 @@ def load_wpc_geofences(
         else:
             logger.info("POST /geofences/load-wpc day=%d replace=%s", day, replace)
             count = geofence_service.load_wpc_kmz(day=day, replace_cache=replace)
+    except ValueError as exc:
+        detail = f"Invalid request: {exc}"
+        logger.warning("WPC KMZ rejected invalid URL: %s", exc)
+        raise HTTPException(status_code=400, detail=detail) from exc
     except requests.HTTPError as exc:
-        status = exc.response.status_code if exc.response is not None else 502
+        status = exc.response.status_code if exc.response is not None else "unknown"
         detail = (
             f"Failed to fetch WPC KMZ for Day {day}: "
             f"upstream server returned HTTP {status}."
         )
-        logger.error("WPC KMZ fetch failed (HTTP %d): %s", status, exc)
+        logger.error("WPC KMZ fetch failed (HTTP %s): %s", status, exc)
         raise HTTPException(status_code=502, detail=detail) from exc
     except requests.RequestException as exc:
         detail = f"Failed to fetch WPC KMZ for Day {day}: network error — {exc}"

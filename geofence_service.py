@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import logging
 import threading
+import urllib.parse
 import zipfile
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -24,10 +25,31 @@ WPC_ERO_KMZ_URL_TEMPLATE = (
     "https://www.wpc.ncep.noaa.gov/kml/ero/Day_{day}_Excessive_Rainfall_Outlook.kmz"
 )
 
+# Trusted hostnames for WPC KMZ downloads (SSRF safeguard).
+_TRUSTED_KMZ_HOSTS = frozenset({
+    "www.wpc.ncep.noaa.gov",
+    "wpc.ncep.noaa.gov",
+})
+
 # Louisiana geographic bounding box (minx, miny, maxx, maxy) in decimal degrees.
 # Only ERO polygons that intersect this region are retained.
 LOUISIANA_BOUNDS = (-94.043, 28.928, -88.817, 33.019)
 _LOUISIANA_BOX: Polygon = box(*LOUISIANA_BOUNDS)
+
+
+def _validate_kmz_url(url: str) -> None:
+    """
+    Raise ValueError if *url* does not point to a trusted NOAA/WPC host.
+    Prevents Server-Side Request Forgery (SSRF) via the optional ?url= parameter.
+    """
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"KMZ URL must use http or https (got {parsed.scheme!r})")
+    if parsed.hostname not in _TRUSTED_KMZ_HOSTS:
+        raise ValueError(
+            f"KMZ URL hostname {parsed.hostname!r} is not in the trusted allowlist "
+            f"({', '.join(sorted(_TRUSTED_KMZ_HOSTS))})"
+        )
 
 
 class GeofenceService:
@@ -354,9 +376,11 @@ class GeofenceService:
         Download a KMZ from an arbitrary URL, parse polygons, and load them.
         Useful for dated or alternate hosting paths.
         Raises:
+            ValueError: if the URL is not from a trusted NOAA/WPC host
             requests.HTTPError: if the HTTP request fails
             RuntimeError: if KMZ parsing fails
         """
+        _validate_kmz_url(url)
         logger.info("[WPC Day %d] Fetching KMZ from custom URL: %s", day, url)
         try:
             headers = {"User-Agent": USER_AGENT}
