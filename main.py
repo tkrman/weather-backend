@@ -2,8 +2,10 @@ import datetime
 import json
 import logging
 import pathlib
+from typing import List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException
+import requests
+from fastapi import Depends, FastAPI, HTTPException, Query
 from shapely.geometry import shape
 from sqlalchemy.orm import Session
 
@@ -22,9 +24,12 @@ from models import (
     LocationUpdateResponse,
     NotificationResultItem,
 )
-from typing import List
 from notification_service import send_hazard_notifications_batch
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Louisiana Weather Geofence API")
@@ -276,6 +281,86 @@ def load_demo_geofences():
 
     ingest = GeofenceIngestRequest(hazard_zones=raw["hazard_zones"], replace=True)
     return load_geofences(ingest)
+
+
+@app.post("/geofences/load-wpc", response_model=GeofenceIngestResponse, status_code=200)
+def load_wpc_geofences(
+    day: int = Query(default=1, ge=1, le=5, description="Forecast day (1–5)"),
+    replace: bool = Query(default=True, description="Replace cache (true) or append (false)"),
+    url: Optional[str] = Query(default=None, description="Override KMZ URL for testing"),
+):
+    """
+    Fetch the latest WPC (Weather Prediction Center) Excessive Rainfall Outlook
+    from the live WPC KMZ (Day 1–5) and load it into the in-memory cache.
+
+    **This IS a multi-day forecast** (unlike NWS alerts). The WPC ERO KMZ provides
+    the 5-day Excessive Rainfall Outlook, with daily updates.
+
+    Args:
+      - **day**: Which forecast day to fetch (1–5). Defaults to 1.
+      - **replace**: If true (default), replaces the current cache. If false, appends.
+      - **url**: Optional override URL for the KMZ source (useful for testing alternate URLs).
+
+    Each loaded zone includes:
+    - **event**: ``"Excessive Rainfall Outlook"``
+    - **severity**: ``MRGL``, ``SLGT``, ``MDT``, or ``HIGH`` (standardized from the KMZ)
+
+    The response includes **fetched_at** — the UTC timestamp of when this
+    request was processed.
+    """
+    try:
+        if url:
+            logger.info("POST /geofences/load-wpc day=%d replace=%s url=%s", day, replace, url)
+            count = geofence_service.load_wpc_kmz_by_url(url=url, day=day, replace_cache=replace)
+        else:
+            logger.info("POST /geofences/load-wpc day=%d replace=%s", day, replace)
+            count = geofence_service.load_wpc_kmz(day=day, replace_cache=replace)
+    except ValueError as exc:
+        detail = f"Invalid request: {exc}"
+        logger.warning("WPC KMZ rejected invalid URL: %s", exc)
+        raise HTTPException(status_code=400, detail=detail) from exc
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else "unknown"
+        detail = (
+            f"Failed to fetch WPC KMZ for Day {day}: "
+            f"upstream server returned HTTP {status}."
+        )
+        logger.error("WPC KMZ fetch failed (HTTP %s): %s", status, exc)
+        raise HTTPException(status_code=502, detail=detail) from exc
+    except requests.RequestException as exc:
+        detail = f"Failed to fetch WPC KMZ for Day {day}: network error — {exc}"
+        logger.error("WPC KMZ network error: %s", exc)
+        raise HTTPException(status_code=502, detail=detail) from exc
+    except RuntimeError as exc:
+        detail = f"Failed to parse WPC KMZ for Day {day}: {exc}"
+        logger.error("WPC KMZ parse error: %s", exc)
+        raise HTTPException(status_code=422, detail=detail) from exc
+    except Exception as exc:
+        detail = f"Unexpected error loading WPC KMZ for Day {day}: {exc}"
+        logger.error("WPC KMZ unexpected error: %s", exc)
+        raise HTTPException(status_code=500, detail=detail) from exc
+
+    if count == 0:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"WPC KMZ for Day {day} was fetched and parsed successfully "
+                f"but contains no polygons overlapping Louisiana bounds."
+            ),
+        )
+
+    total = geofence_service.count()
+    logger.info("WPC KMZ Day %d: loaded %d polygon(s); cache total=%d", day, count, total)
+    return GeofenceIngestResponse(
+        loaded=count,
+        total_cached=total,
+        replaced=replace,
+        message=(
+            f"Loaded {count} WPC ERO Day {day} polygon(s) (Louisiana region). "
+            f"Cache now holds {total} zone(s)."
+        ),
+        fetched_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    )
 
 
 @app.post("/check-location", response_model=LocationCheckResponse)
